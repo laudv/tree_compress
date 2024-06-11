@@ -136,7 +136,6 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
 
             #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             alpha_list = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.925,0.955,0.975,1]
-            best_score = -np.inf
             for alpha in alpha_list:
                 refiner.set_params(at_orig, alpha)
                 refiner.refine(50, sparse_train_x, dtrain.y)
@@ -150,15 +149,11 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
                 at_compr,
             )
                 num_leaves_after = at_compr.num_leafs()
-                s = "bad"
                 if mvalid - score < abserr:
-                    s = "good enough"
                     if (smallest > num_leaves_after):
-                        s = "good enough smallest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
                     elif (smallest == num_leaves_after) and (accuratest < score):
-                        s = "good enough accuratest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
 
@@ -175,7 +170,6 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
 
         elif penalty == "gr":
             alpha_list = [10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
-            best_score = -np.inf
             for alpha in  alpha_list:
                 refiner.set_params(C = 1/alpha)
                 with warnings.catch_warnings():
@@ -189,32 +183,30 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
                     gr_prune(t,t.root(),nt,nt.root(),0.1)
                 score = dvalid.metric(at_temp_pruned)
                 num_leaves_after = at_temp_pruned.num_leafs()
-                s = "bad"
                 if mvalid - score < abserr:
-                    s = "good enough"
                     if (smallest > num_leaves_after):
-                        s = "good enough smallest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
                     elif (smallest == num_leaves_after) and (accuratest < score):
-                        s = "good enough accuratest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
 
-            refiner.set_params(C=1 / best_alpha)
-            refiner.fit(sparse_train_x, dtrain.y)
-            at_refined_temp = at_orig.copy()
-            at_refined_temp = set_new_leaf_vals(
-                at_refined_temp, refiner.intercept_[0], refiner.coef_[0]
-            )
-            at_refined = veritas.AddTree(at_orig.num_leaf_values(), at_orig.get_type())
-            for tree_index, t in enumerate(at_refined_temp):
-                nt = at_refined.add_tree()
-                gr_prune(t, t.root(), nt, nt.root(), 0.1)
+            if best_alpha != 0.0:
+                refiner.set_params(C=1 / best_alpha)
+                refiner.fit(sparse_train_x, dtrain.y)
+                at_refined_temp = at_orig.copy()
+                at_refined_temp = set_new_leaf_vals(
+                    at_refined_temp, refiner.intercept_[0], refiner.coef_[0]
+                )
+                at_refined = veritas.AddTree(at_orig.num_leaf_values(), at_orig.get_type())
+                for tree_index, t in enumerate(at_refined_temp):
+                    nt = at_refined.add_tree()
+                    gr_prune(t, t.root(), nt, nt.root(), 0.1)
+            else:
+                at_refined = at_orig.copy()
 
         elif penalty == "ic":
             # alpha here is number of expected trees in the ensemble
-            best_score = -np.inf
             ensamble_proba = np.asarray([(t.eval(dtrain.X).clip(-1,1) + 1) / 2 for t in at_orig])
             ensamble_proba = np.concatenate((1-ensamble_proba,ensamble_proba),axis=2)
             ic_list = individual_contribution(ensamble_proba, (np.asarray(dtrain.y) + 1) / 2)
@@ -225,15 +217,11 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
                 temp_at.add_tree(sorted_trees[alpha])
                 score = dvalid.metric(temp_at)
                 num_leaves_after = temp_at.num_leafs()
-                s = "bad"
                 if mvalid - score < abserr:
-                    s = "good enough"
                     if (smallest > num_leaves_after):
-                        s = "good enough smallest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
                     elif (smallest == num_leaves_after) and (accuratest < score):
-                        s = "good enough accuratest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
 
@@ -242,38 +230,51 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
             for alpha in range(int(best_alpha)):
                 at_refined.add_tree(sorted_trees[alpha])
 
-        else:
+        elif penalty == "l1":
             alpha_list = [10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
-            best_score = -np.inf
             for alpha in  alpha_list:
                 refiner.set_params(C = 1/alpha)
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=ConvergenceWarning)
-                    refiner.fit(sparse_train_x, dtrain.y)
+                #with warnings.catch_warnings():
+                #    warnings.filterwarnings("ignore", category=ConvergenceWarning)
+                refiner.fit(sparse_train_x, dtrain.y)
                 preds = refiner.predict(sparse_valid_x)
                 score = dvalid.metric(preds > 0.0)
                 at_temp = at_orig.copy()
                 at_temp = set_new_leaf_vals(at_temp, refiner.intercept_[0], refiner.coef_[0])
                 num_leaves_after = at_temp.num_leafs()
-                s = "bad"
                 if mvalid - score < abserr:
-                    s = "good enough"
                     if (smallest > num_leaves_after):
-                        s = "good enough smallest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
                     elif (smallest == num_leaves_after) and (accuratest < score):
-                        s = "good enough accuratest!"
                         smallest = num_leaves_after
                         best_alpha = alpha
-            refiner.set_params(C = 1/best_alpha)
-            refiner.fit(sparse_train_x,dtrain.y)
 
-            at_refined = at_orig.copy()
-            at_refined = set_new_leaf_vals(at_refined, refiner.intercept_[0], refiner.coef_[0])
-        
+            if best_alpha != 0.0:
+                refiner.set_params(C = 1/best_alpha)
+                refiner.fit(sparse_train_x,dtrain.y)
+
+                at_refined = at_orig.copy()
+                at_refined = set_new_leaf_vals(at_refined, refiner.intercept_[0], refiner.coef_[0])
+            else:
+                at_refined = at_orig.copy()
+        else:
+            raise RuntimeError(f"I don't know {penalty}")
         
         refine_time = time.time() - refine_time
+        mtrain_refined = dtrain.metric(at_refined)
+        mvalid_refined = dvalid.metric(at_refined)
+        mtest_refined = dtest.metric(at_refined)
+
+        if not silent:
+            print(" alpha", best_alpha)
+            print("mtrain", f"{mtrain:.3f} -> {mtrain_refined:.3f}")
+            print("mvalid", f"{mvalid:.3f} -> {mvalid_refined:.3f}")
+            print(" mtest", f"{mtest:.3f} -> {mtest_refined:.3f}")
+            print("ntrees", f"{len(at_orig):5d} -> {len(at_refined):5d}")
+            print("nleafs", f"{at_orig.num_leafs():5d} -> {at_refined.num_leafs():5d}")
+            print("   nnz", f"{tree_compress.count_nnz_leafs(at_orig):5d} ->",
+                            f"{tree_compress.count_nnz_leafs(at_refined):5d}")
 
         refine_result = {
             "params": params,
@@ -281,9 +282,9 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
 
             # Performance of the compressed model
             "compr_time": refine_time,
-            "mtrain": dtrain.metric(at_refined),
-            "mvalid": dvalid.metric(at_refined),
-            "mtest": dtest.metric(at_refined),
+            "mtrain": mtrain_refined,
+            "mvalid": mvalid_refined,
+            "mtest":  mtest_refined,
             "ntrees": len(at_refined),
             "nnodes": int(at_refined.num_nodes()),
             "nleafs": int(at_refined.num_leafs()),
@@ -292,12 +293,10 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
         }
 
         refine_results.append(refine_result)
-        if not silent:
-            __import__('pprint').pprint(refine_result)
 
     results = {
         # Experimental settings
-        "cmd": f"lr_{penalty}",
+        "cmd": f"can_{penalty}_{abserr*1000:03.0f}",
         "date_time": util.nowstr(),
         "hostname": os.uname()[1],
         "dname": dname,

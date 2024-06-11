@@ -76,7 +76,7 @@ def compress_cmd(dname, fold, abserr, seed, silent):
         ## RETRAINING XGB but now with reg_alpha value
         num_leaves_before = at_orig.num_leafs()
 
-        best = at_orig
+        at_best = at_orig
         smallest = num_leaves_before
         accuratest = mvalid
         best_alpha = 0.0
@@ -99,12 +99,12 @@ def compress_cmd(dname, fold, abserr, seed, silent):
                 s = "good enough"
                 if (smallest > num_leaves_after):
                     s = "good enough smallest!"
-                    best = at_compr
+                    at_best = at_compr
                     smallest = num_leaves_after
                     best_alpha = alpha
                 elif (smallest == num_leaves_after) and (accuratest < mvalid_compr):
                     s = "good enough accuratest!"
-                    best = at_compr
+                    at_best = at_compr
                     smallest = num_leaves_after
                     best_alpha = alpha
 
@@ -113,12 +113,16 @@ def compress_cmd(dname, fold, abserr, seed, silent):
                       f"{num_leaves_before-num_leaves_after} {s}")
 
         compr_time = time.time() - compr_time
+        mtrain_compr = dtrain.metric(at_best)
+        mvalid_compr = dvalid.metric(at_best)
+        mtest_compr = dtest.metric(at_best)
 
-        mtrain_compr = dtrain.metric(best)
-        mvalid_compr = dvalid.metric(best)
-        mtest_compr = dtest.metric(best)
-
-        from tree_compress.lasso_compress import count_nnz_leafs
+        if not silent:
+            print("mtrain", f"{mtrain:.3f} -> {mtrain_compr:.3f}")
+            print("mvalid", f"{mvalid:.3f} -> {mvalid_compr:.3f}")
+            print(" mtest", f"{mtest:.3f} -> {mtest_compr:.3f}")
+            print("ntrees", f"{len(at_orig):5d} -> {len(at_best):5d}")
+            print("nleafs", f"{at_orig.num_leafs():5d} -> {at_best.num_leafs():5d}")
 
         compress_result = {
             "params": params,
@@ -129,11 +133,11 @@ def compress_cmd(dname, fold, abserr, seed, silent):
             "mtrain": float(mtrain_compr),
             "mvalid": float(mvalid_compr),
             "mtest": float(mtest_compr),
-            "ntrees": int(len(best)),
-            "nnodes": int(best.num_nodes()),
-            "nleafs": int(best.num_leafs()),
-            "nnzleafs": int(count_nnz_leafs(best)),
-            "max_depth": int(best.max_depth()),
+            "ntrees": int(len(at_best)),
+            "nnodes": int(at_best.num_nodes()),
+            "nleafs": int(at_best.num_leafs()),
+            "nnzleafs": int(tree_compress.count_nnz_leafs(at_best)),
+            "max_depth": int(at_best.max_depth()),
 
             ## Log the compression process
             #"ntrees_rec": [int(r.ntrees) for r in compr.records],
@@ -143,14 +147,12 @@ def compress_cmd(dname, fold, abserr, seed, silent):
             #"mvalid_rec": [float(r.mvalid) for r in compr.records],
             #"mtest_rec": [float(r.mtest) for r in compr.records],
         }
-        if not silent:
-            __import__('pprint').pprint(compress_result)
         compress_results.append(compress_result)
 
     results = {
 
         # Experimental settings
-        "cmd": f"compress{abserr*1000:03.0f}",
+        "cmd": f"xgbl1{abserr*1000:03.0f}",
         "date_time": util.nowstr(),
         "hostname": os.uname()[1],
         "dname": dname,
