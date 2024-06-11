@@ -15,7 +15,6 @@ import torch.nn as nn
 
 import util
 import tree_compress
-import verification
 
 
 @click.group()
@@ -24,43 +23,39 @@ def cli():
 
 @cli.command("list")
 @click.option("--cmd", type=click.Choice(["train", "compress"]), default="train")
-@click.option("--linclf_type", type=click.Choice(["LogisticRegression", "Lasso"]),
-              default="Lasso")
 @click.option("--penalty", type=click.Choice(["l1", "l2", "lrl1"]),
               default="l2")
 @click.option("--seed", default=util.SEED)
-def print_configs(cmd, linclf_type, penalty, seed):
+def print_configs(cmd, penalty, seed):
     for dname in util.DNAMES_SUBSUB:
         d = prada.get_dataset(dname, seed=seed, silent=True)
 
-        for model_type in ["xgb"]:#, "dt"]:
-            folds = [i for i in range(util.NFOLDS)]
+        folds = [i for i in range(util.NFOLDS)]
 
-            grid = d.paramgrid(fold=folds)
+        grid = d.paramgrid(fold=folds)
 
-            for cli_param in grid:
-                print("python can_experiment.py leaf_refine",
-                      dname,
-                      "--model_type", model_type,
-                      "--linclf_type", linclf_type,
-                      "--penalty", penalty,
-                      "--fold", cli_param["fold"],
-                      "--seed", seed,
-                      "--silent")
+        for cli_param in grid:
+            print("python can_experiment.py leaf_refine",
+                  dname,
+                  "--penalty", penalty,
+                  "--fold", cli_param["fold"],
+                  "--seed", seed,
+                  "--silent")
 
 
 @cli.command("leaf_refine")
 @click.argument("dname")
-@click.option("-m", "--model_type", type=click.Choice(["xgb", "rf", "lgb", "dt"]),
-              default="xgb")
-@click.option("--linclf_type", type=click.Choice(["LogisticRegression", "Lasso"]),
-              default="Lasso")
 @click.option("--penalty", type=click.Choice(["l1", "l2", "lrl1", "ic", "gr"]),
               default="l2")
 @click.option("--fold", default=0)
+@click.option("--abserr", default=0.01)
 @click.option("--seed", default=util.SEED)
 @click.option("--silent", is_flag=True, default=False)
-def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
+def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
+    # fixed parameters for workshop paper
+    model_type = "xgb"
+    linclf_type = "Lasso"
+
     np.random.seed(seed)
     torch.manual_seed(seed)
     random.seed(seed)
@@ -74,10 +69,8 @@ def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
     # classification.
     key = util.get_key(model_type, linclf_type, seed)
     train_results = util.load_train_results()[key][dname]
+
     refine_results = []
-
-    assert linclf_type == "Lasso"
-
     for params_hash, folds in train_results.items():
         tres = folds[fold]
         params = tres["params"]
@@ -109,7 +102,6 @@ def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
         assert np.abs(mvalid - tres["mvalid"]) < 1e-5
         assert np.abs(mtest - tres["mtest"]) < 1e-5
 
-
         refine_time = time.time()
         if penalty == "lrl1":
             refiner = LRPlusL1Refiner()
@@ -133,17 +125,15 @@ def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
                 random_state=3582134,
             )
 
-        sparse_train_x = transform_data_sparse(at_orig,dtrain.X) 
-        sparse_valid_x = transform_data_sparse(at_orig,dvalid.X)
+        sparse_train_x = transform_data_sparse(at_orig, dtrain.X)
+        sparse_valid_x = transform_data_sparse(at_orig, dvalid.X)
 
-
-            
         if penalty == "lrl1":
 
             #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             alpha_list = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.925,0.955,0.975,1]
             best_score = -np.inf
-            for alpha in  alpha_list:
+            for alpha in alpha_list:
                 refiner.set_params(at_orig, alpha)
                 refiner.refine(50, sparse_train_x, dtrain.y)
                 preds = refiner(torch.from_numpy(sparse_valid_x.todense())).detach().numpy()
@@ -180,16 +170,17 @@ def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
                 if score > best_score:
                     best_score = score
                     best_alpha = alpha
-                
-            refiner.set_params(C = 1/best_alpha)
-            refiner.fit(sparse_train_x,dtrain.y)
+
+            refiner.set_params(C=1 / best_alpha)
+            refiner.fit(sparse_train_x, dtrain.y)
             at_refined_temp = at_orig.copy()
-            at_refined_temp = set_new_leaf_vals(at_refined_temp, refiner.intercept_[0], refiner.coef_[0])
+            at_refined_temp = set_new_leaf_vals(
+                at_refined_temp, refiner.intercept_[0], refiner.coef_[0]
+            )
             at_refined = veritas.AddTree(at_orig.num_leaf_values(), at_orig.get_type())
             for tree_index, t in enumerate(at_refined_temp):
                 nt = at_refined.add_tree()
-                gr_prune(t,t.root(),nt,nt.root(),0.1)
-            
+                gr_prune(t, t.root(), nt, nt.root(), 0.1)
 
         elif penalty == "ic":
             # alpha here is number of expected trees in the ensemble
@@ -205,16 +196,12 @@ def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
                 score = dvalid.metric(temp_at)
                 if score > best_score:
                     best_score = score
-                    best_alpha = alpha + 1                
+                    best_alpha = alpha + 1
 
-            
             at_refined = veritas.AddTree(1, veritas.AddTreeType.REGR)
-            at_refined.set_base_score(0,at_orig.get_base_score(0))
+            at_refined.set_base_score(0, at_orig.get_base_score(0))
             for alpha in range(best_alpha):
                 at_refined.add_tree(sorted_trees[alpha])
-
-
-
 
         else:
             alpha_list = [10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
@@ -231,7 +218,7 @@ def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
                     best_alpha = alpha
             refiner.set_params(C = 1/best_alpha)
             refiner.fit(sparse_train_x,dtrain.y)
-            
+
             at_refined = at_orig.copy()
             at_refined = set_new_leaf_vals(at_refined, refiner.intercept_[0], refiner.coef_[0])
         
@@ -252,14 +239,6 @@ def leaf_refine_cmd(dname, model_type, linclf_type, penalty,fold, seed, silent):
             "nleafs": int(at_refined.num_leafs()),
             "nnzleafs": int(tree_compress.count_nnz_leafs(at_refined)),
             "max_depth": int(at_refined.max_depth()),
-
-            # Verification
-            "verification": {
-                "orig": None,
-                "refined": verification.run_verification_tasks(
-                    at_refined, dtest.X, dtest.y, timeout=util.TIMEOUT, n=util.NUM_ADV_EX
-                ),
-            },
         }
 
         refine_results.append(refine_result)
