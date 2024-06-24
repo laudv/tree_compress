@@ -21,16 +21,18 @@ export OMP_NUM_THREADS=1
 
 #python experiments.py commands $DATASETS | parallel --slf cluster --env PATH --wd $WDIR --joblog task.log --resume --progress | tee $OUTNAME
 
-echo "###################################################"  | tee --append $OUTNAME
-echo "  ${HOSTNAME}  ${DATE}"                               | tee --append $OUTNAME
-echo "###################################################"  | tee --append $OUTNAME
-
 
 if [ "${HOSTNAME}" = "laurens-hp" ]; then
     NTHREADS=4
+elif [ "${HOSTNAME}" = "himec05" ]; then
+    NTHREADS=8
 else
     NTHREADS=30  # assuming himec03/04
 fi
+
+echo "###################################################"  | tee --append $OUTNAME
+echo "  ${HOSTNAME}  ${DATE}" ${NTHREADS} THREADS           | tee --append $OUTNAME
+echo "###################################################"  | tee --append $OUTNAME
 
 cat $CMD_LIST |
     parallel -j${NTHREADS} \

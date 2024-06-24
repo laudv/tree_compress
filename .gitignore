@@ -11,3 +11,4 @@ experiment/get_results.sh
 experiment/lists
 sync.sh
 examples/tex
+*.png

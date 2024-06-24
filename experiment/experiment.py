@@ -10,7 +10,7 @@ import model_params
 import util
 import tree_compress
 
-from sklearn.metrics import balanced_accuracy_score, root_mean_squared_error
+from sklearn.metrics import balanced_accuracy_score
      
 @click.group()
 def cli():
@@ -20,7 +20,7 @@ def cli():
 @click.option("--cmd", type=click.Choice(["train", "compress"]), default="train")
 @click.option("--linclf_type", type=click.Choice(["LogisticRegression", "Lasso"]),
               default="Lasso")
-@click.option("--abserr", default=0.01)
+@click.option("--abserr", default=0.005)
 @click.option("--seed", default=util.SEED)
 def print_configs(cmd, linclf_type, abserr, seed):
     if cmd == "train":
@@ -44,20 +44,17 @@ def print_configs(cmd, linclf_type, abserr, seed):
         for dname in util.DNAMES_SUBSUB:
             d = prada.get_dataset(dname, seed=seed, silent=True)
 
-            for model_type in ["xgb"]:#, "dt"]:
-                folds = [i for i in range(util.NFOLDS)]
+            folds = [i for i in range(util.NFOLDS)]
 
-                grid = d.paramgrid(fold=folds)
+            grid = d.paramgrid(fold=folds)
 
-                for cli_param in grid:
-                    print("python experiment.py compress",
-                          dname,
-                          "--model_type", model_type,
-                          "--linclf_type", linclf_type,
-                          "--fold", cli_param["fold"],
-                          "--abserr", abserr,
-                          "--seed", seed,
-                          "--silent")
+            for cli_param in grid:
+                print("python experiment.py compress",
+                      dname,
+                      "--fold", cli_param["fold"],
+                      "--seed", seed,
+                      "--abserr", abserr,
+                      "--silent")
     else:
         raise RuntimeError("dont know")
 
@@ -188,13 +185,7 @@ def process_compress_cmd(fnames):
         dname = j["dname"]
         fold = j["fold"]
         key = util.get_key(j)
-
-        if "abserr" in j:
-            name = f'{j["abserr"]*1000:03.0f}'
-        elif j["cmd"].startswith("lr_"):
-            name = j["cmd"]
-        else:
-            raise RuntimeError(f"don't know {j['cmd']=}")
+        name = j["cmd"]
 
         print(key, dname, fold, name)
 
@@ -204,15 +195,14 @@ def process_compress_cmd(fnames):
         for m in j["models"]:
             params = m["params"]
             params_hash = util.params_hash(params)
-            #print(params_hash, params)
+            #print("-", dname, fold, name, params_hash[:6])
             forparams = util.get_or_insert(fordname, params_hash, lambda: {})
             forabserr = util.get_or_insert(forparams, name, lambda: {})
             if fold in forabserr:
-                print(f"overriding {fold} for {key} {dname} {name} {params_hash[:6]}")
+                print(f"overriding for {key} {dname} {fold} {name} {params_hash[:6]} {j['date_time']}")
             forabserr[fold] = m
 
     #__import__('pprint').pprint(results)
-
     util.write_compress_results(results)
 
 
@@ -258,6 +248,7 @@ def plot_compress_cmd(dname, model_type, linclf_type, seed):
             plt.close('all')
             train_results = all_train_results[dname]
             compr_results = all_compr_results[dname]
+            print("train_results", train_results)
             fig, ax, goodness_score = util.plot_it_nogekeer(
                 dname, train_results, compr_results, nnz=False
             )
@@ -355,7 +346,7 @@ def train_cmd(dname, model_type, linclf_type, fold, seed, silent):
 @cli.command("compress")
 @click.argument("dname")
 @click.option("--fold", default=0)
-@click.option("--abserr", default=0.01)
+@click.option("--abserr", default=0.005)
 @click.option("--seed", default=util.SEED)
 @click.option("--silent", is_flag=True, default=False)
 def compress_cmd(dname, fold, abserr, seed, silent):

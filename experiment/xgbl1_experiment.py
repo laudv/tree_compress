@@ -19,7 +19,7 @@ def cli():
 @cli.command("compress")
 @click.argument("dname")
 @click.option("--fold", default=0)
-@click.option("--abserr", default=0.01)
+@click.option("--abserr", default=0.005)
 @click.option("--seed", default=util.SEED)
 @click.option("--silent", is_flag=True, default=False)
 def compress_cmd(dname, fold, abserr, seed, silent):
@@ -152,7 +152,7 @@ def compress_cmd(dname, fold, abserr, seed, silent):
     results = {
 
         # Experimental settings
-        "cmd": f"xgbl1{abserr*1000:03.0f}",
+        "cmd": f"xgbl1_{abserr*1000:03.0f}",
         "date_time": util.nowstr(),
         "hostname": os.uname()[1],
         "dname": dname,

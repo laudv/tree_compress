@@ -12,6 +12,7 @@ from sklearn.exceptions import ConvergenceWarning
 import torch
 import random
 import torch.nn as nn
+from sklearn.metrics import balanced_accuracy_score
 
 import util
 import tree_compress
@@ -22,33 +23,42 @@ def cli():
     pass
 
 @cli.command("list")
-@click.option("--cmd", type=click.Choice(["train", "compress"]), default="train")
-@click.option("--penalty", type=click.Choice(["l1", "l2", "lrl1"]),
-              default="l2")
 @click.option("--seed", default=util.SEED)
-def print_configs(cmd, penalty, seed):
+def print_configs(seed):
     for dname in util.DNAMES_SUBSUB:
         d = prada.get_dataset(dname, seed=seed, silent=True)
 
         folds = [i for i in range(util.NFOLDS)]
+        #penalties = ["lrl1", "ic", "gr"]
+        penalties = ["l1prune"]
 
-        grid = d.paramgrid(fold=folds)
+        grid = d.paramgrid(fold=folds, penalty=penalties)
 
         for cli_param in grid:
             print("python can_experiment.py leaf_refine",
                   dname,
-                  "--penalty", penalty,
+                  "--penalty", cli_param["penalty"],
                   "--fold", cli_param["fold"],
                   "--seed", seed,
+                  "--abserr 0.005",
                   "--silent")
+
+        ## also include xgbl1
+        #for fold in folds:
+        #    print("python xgbl1_experiment.py compress",
+        #          dname,
+        #          "--fold", fold,
+        #          "--seed", seed,
+        #          "--abserr 0.005",
+        #          "--silent")
 
 
 @cli.command("leaf_refine")
 @click.argument("dname")
-@click.option("--penalty", type=click.Choice(["l1", "l2", "lrl1", "ic", "gr"]),
+@click.option("--penalty", type=click.Choice(["l1", "l1prune", "l2", "lrl1", "ic", "gr"]),
               default="l2")
 @click.option("--fold", default=0)
-@click.option("--abserr", default=0.01)
+@click.option("--abserr", default=0.005)
 @click.option("--seed", default=util.SEED)
 @click.option("--silent", is_flag=True, default=False)
 def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
@@ -143,11 +153,11 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
                 score = dvalid.metric(preds > 0.0)
                 at_compr = at_orig.copy()
                 at_compr = set_new_addtree(
-                refiner.tree_weights.detach().numpy(),
-                [w.detach().numpy() for w in refiner.leaf_weights],
-                refiner.base_score.detach().numpy(),
-                at_compr,
-            )
+                    refiner.tree_weights.detach().numpy(),
+                    [w.detach().numpy() for w in refiner.leaf_weights],
+                    refiner.base_score.detach().numpy(),
+                    at_compr,
+                )
                 num_leaves_after = at_compr.num_leafs()
                 if mvalid - score < abserr:
                     if (smallest > num_leaves_after):
@@ -205,8 +215,34 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
             else:
                 at_refined = at_orig.copy()
 
+        #elif penalty == "ic":
+        #    # alpha here is number of expected trees in the ensemble
+        #    ensamble_proba = np.asarray([(t.eval(dtrain.X).clip(-1,1) + 1) / 2 for t in at_orig])
+        #    ensamble_proba = np.concatenate((1-ensamble_proba,ensamble_proba),axis=2)
+        #    ic_list = individual_contribution(ensamble_proba, (np.asarray(dtrain.y) + 1) / 2)
+        #    sorted_trees = [at_orig[i] for i in np.argsort(ic_list)]
+        #    temp_at = veritas.AddTree(1, veritas.AddTreeType.REGR)
+        #    temp_at.set_base_score(0,at_orig.get_base_score(0))
+        #    for alpha in range(len(at_orig)):
+        #        temp_at.add_tree(sorted_trees[alpha])
+        #        score = dvalid.metric(temp_at)
+        #        num_leaves_after = temp_at.num_leafs()
+        #        if mvalid - score < abserr:
+        #            if (smallest > num_leaves_after):
+        #                smallest = num_leaves_after
+        #                best_alpha = alpha
+        #            elif (smallest == num_leaves_after) and (accuratest < score):
+        #                smallest = num_leaves_after
+        #                best_alpha = alpha
+
+        #    at_refined = veritas.AddTree(1, veritas.AddTreeType.REGR)
+        #    at_refined.set_base_score(0, at_orig.get_base_score(0))
+        #    for alpha in range(int(best_alpha)):
+        #        at_refined.add_tree(sorted_trees[alpha])
+
         elif penalty == "ic":
             # alpha here is number of expected trees in the ensemble
+            best_score = -np.inf
             ensamble_proba = np.asarray([(t.eval(dtrain.X).clip(-1,1) + 1) / 2 for t in at_orig])
             ensamble_proba = np.concatenate((1-ensamble_proba,ensamble_proba),axis=2)
             ic_list = individual_contribution(ensamble_proba, (np.asarray(dtrain.y) + 1) / 2)
@@ -216,18 +252,13 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
             for alpha in range(len(at_orig)):
                 temp_at.add_tree(sorted_trees[alpha])
                 score = dvalid.metric(temp_at)
-                num_leaves_after = temp_at.num_leafs()
-                if mvalid - score < abserr:
-                    if (smallest > num_leaves_after):
-                        smallest = num_leaves_after
-                        best_alpha = alpha
-                    elif (smallest == num_leaves_after) and (accuratest < score):
-                        smallest = num_leaves_after
-                        best_alpha = alpha
-
+                if score > best_score:
+                    best_score = score
+                    best_alpha = alpha + 1                
+            
             at_refined = veritas.AddTree(1, veritas.AddTreeType.REGR)
-            at_refined.set_base_score(0, at_orig.get_base_score(0))
-            for alpha in range(int(best_alpha)):
+            at_refined.set_base_score(0,at_orig.get_base_score(0))
+            for alpha in range(best_alpha):
                 at_refined.add_tree(sorted_trees[alpha])
 
         elif penalty == "l1":
@@ -258,6 +289,29 @@ def leaf_refine_cmd(dname, penalty, fold, abserr, seed, silent):
                 at_refined = set_new_leaf_vals(at_refined, refiner.intercept_[0], refiner.coef_[0])
             else:
                 at_refined = at_orig.copy()
+
+        elif penalty == "l1prune":
+            def mymetric(ytrue, ypred):
+                return balanced_accuracy_score(ytrue > 0.0, ypred > 0.0)
+
+            data = tree_compress.Data(
+                    dtrain.X.to_numpy(), dtrain.y.to_numpy(),
+                    dtest.X.to_numpy(), dtest.y.to_numpy(),
+                    dvalid.X.to_numpy(), dvalid.y.to_numpy())
+
+            compr = tree_compress.LassoCompress(
+                data,
+                at_orig,
+                metric=mymetric,
+                isworse=lambda v, ref: ref-v > abserr,
+                linclf_type=linclf_type,
+                seed=seed,
+                silent=silent
+            )
+            compr.no_convergence_warning = True
+            record = compr._compress_level(level=at_orig.max_depth() + 1)
+            at_refined = record.at
+            best_alpha = record.alpha
         else:
             raise RuntimeError(f"I don't know {penalty}")
         
